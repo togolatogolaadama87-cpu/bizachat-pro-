@@ -1,0 +1,65 @@
+name: Build BizChat Pro
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Télécharger le projet
+        uses: actions/checkout@v4
+
+      - name: Préparer le projet
+        run: |
+          mkdir -p project
+          unzip -q *.zip -d project
+          cd project
+          if [ -f pubspec.yaml ]; then
+            echo "Projet trouvé"
+          else
+            DIR=$(find . -name pubspec.yaml -print -quit | xargs dirname)
+            cp -r "$DIR"/. .
+          fi
+
+      - name: Installer Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Préparer Android
+        run: |
+          cd project
+          flutter create . --platforms=android
+
+      - name: Installer les dépendances
+        run: |
+          cd project
+          flutter pub get
+
+      - name: Construire APK
+        run: |
+          cd project
+          flutter build apk --release
+
+      - name: Construire AAB
+        run: |
+          cd project
+          flutter build appbundle --release
+
+      - name: Récupérer APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BizChatPro-APK
+          path: project/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Récupérer AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: BizChatPro-AAB
+          path: project/build/app/outputs/bundle/release/app-release.aab
