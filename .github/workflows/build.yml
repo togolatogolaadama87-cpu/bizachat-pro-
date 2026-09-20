@@ -15,16 +15,32 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Préparer le projet
+        shell: bash
         run: |
+          rm -rf project
           mkdir -p project
-          unzip -q *.zip -d project
-          cd project
-          if [ -f pubspec.yaml ]; then
-            echo "Projet trouvé"
-          else
-            DIR=$(find . -name pubspec.yaml -print -quit | xargs dirname)
-            cp -r "$DIR"/. .
+
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP" ]; then
+            echo "Aucun fichier ZIP trouvé"
+            exit 1
           fi
+
+          echo "ZIP trouvé : $ZIP"
+          unzip -q "$ZIP" -d project
+
+          PUBSPEC=$(find project -type f -name "pubspec.yaml" | head -n 1)
+
+          if [ -z "$PUBSPEC" ]; then
+            echo "pubspec.yaml introuvable"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PUBSPEC")
+
+          echo "Projet Flutter : $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Installer Flutter
         uses: subosito/flutter-action@v2
@@ -32,34 +48,44 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Préparer Android
+      - name: Corriger Android compileSdk
+        shell: bash
         run: |
-          cd project
-          flutter create . --platforms=android
+          cd "$PROJECT_DIR"
+
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*.*/compileSdk = 36/' android/app/build.gradle.kts
+          fi
+
+          if [ -f android/app/build.gradle ]; then
+            sed -i -E 's/compileSdkVersion[[:space:]]+.*/compileSdkVersion 36/' android/app/build.gradle
+          fi
+
+          echo "compileSdk Android configuré sur 36"
 
       - name: Installer les dépendances
         run: |
-          cd project
+          cd "$PROJECT_DIR"
           flutter pub get
 
       - name: Construire APK
         run: |
-          cd project
+          cd "$PROJECT_DIR"
           flutter build apk --release
 
       - name: Construire AAB
         run: |
-          cd project
+          cd "$PROJECT_DIR"
           flutter build appbundle --release
 
       - name: Récupérer APK
         uses: actions/upload-artifact@v4
         with:
           name: BizChatPro-APK
-          path: project/build/app/outputs/flutter-apk/app-release.apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
 
       - name: Récupérer AAB
         uses: actions/upload-artifact@v4
         with:
           name: BizChatPro-AAB
-          path: project/build/app/outputs/bundle/release/app-release.aab
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/bundle/release/app-release.aabe/release/app-release.aab
