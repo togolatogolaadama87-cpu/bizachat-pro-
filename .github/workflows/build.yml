@@ -1,143 +1,166 @@
 name: Build BizChat Pro
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Télécharger le projet
+      - name: Récupérer le dépôt
         uses: actions/checkout@v4
-
-      - name: Préparer le projet
-        shell: bash
-        run: |
-          rm -rf project
-          mkdir -p project
-
-          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP" ]; then
-            echo "ERREUR : aucun fichier ZIP trouvé."
-            exit 1
-          fi
-
-          echo "ZIP trouvé : $ZIP"
-          unzip -q "$ZIP" -d project
-
-          PUBSPEC=$(find project -type f -name "pubspec.yaml" | head -n 1)
-
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERREUR : pubspec.yaml introuvable."
-            find project -maxdepth 3 -type f | head -n 100
-            exit 1
-          fi
-
-          PROJECT_SOURCE=$(dirname "$PUBSPEC")
-
-          echo "Projet Flutter trouvé dans : $PROJECT_SOURCE"
-
-          if [ "$PROJECT_SOURCE" != "project" ]; then
-            cp -a "$PROJECT_SOURCE"/. project/
-          fi
-
-          test -f project/pubspec.yaml
 
       - name: Installer Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          cache: true
+          flutter-version: 3.35.0
+
+      - name: Préparer le projet Flutter
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf work
+          mkdir -p work
+
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP" ]; then
+            echo "ERREUR : aucun fichier ZIP trouvé à la racine du dépôt."
+            exit 1
+          fi
+
+          echo "ZIP trouvé : $ZIP"
+
+          unzip -q "$ZIP" -d work
+
+          PROJECT_DIR=$(find work -type f -name "pubspec.yaml" -printf '%h\n' | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERREUR : aucun projet Flutter trouvé."
+            exit 1
+          fi
+
+          echo "Projet Flutter : $PROJECT_DIR"
+
+          if [ ! -d "$PROJECT_DIR/android" ]; then
+            echo "ERREUR : dossier android absent."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/android/app/build.gradle.kts" ] && \
+             [ ! -f "$PROJECT_DIR/android/app/build.gradle" ]; then
+            echo "ERREUR : aucun fichier build.gradle ou build.gradle.kts trouvé."
+            echo "Structure Android :"
+            find "$PROJECT_DIR/android" -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Vérifier la structure Android
+        shell: bash
+        run: |
+          set -e
+
+          echo "Projet : $PROJECT_DIR"
+          echo "Fichiers Android :"
+
+          find "$PROJECT_DIR/android" -maxdepth 3 -type f | sort
 
       - name: Corriger Android compileSdk
         shell: bash
         run: |
-          cd project
+          set -e
+
+          cd "$PROJECT_DIR"
 
           if [ -f android/app/build.gradle.kts ]; then
+            echo "Fichier Kotlin DSL détecté."
+
             python3 - <<'PY'
           from pathlib import Path
 
           p = Path("android/app/build.gradle.kts")
           s = p.read_text()
 
-          import re
+          s = s.replace(
+              "compileSdk = flutter.compileSdkVersion",
+              "compileSdk = 36"
+          )
 
-          s = re.sub(
-              r'compileSdk\s*=\s*[^\n]+',
-              'compileSdk = 36',
-              s
+          s = s.replace(
+              "compileSdk = 34",
+              "compileSdk = 36"
           )
 
           p.write_text(s)
-          print("compileSdk = 36 configuré dans build.gradle.kts")
           PY
+
+          elif [ -f android/app/build.gradle ]; then
+            echo "Fichier Gradle détecté."
+
+            sed -i -E \
+              's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 36/g' \
+              android/app/build.gradle
+
+            sed -i -E \
+              's/compileSdk[[:space:]]+[0-9]+/compileSdk 36/g' \
+              android/app/build.gradle
           fi
 
-          if [ -f android/app/build.gradle ]; then
-            python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("android/app/build.gradle")
-          s = p.read_text()
-
-          import re
-
-          s = re.sub(
-              r'compileSdkVersion\s+\d+',
-              'compileSdkVersion 36',
-              s
-          )
-
-          s = re.sub(
-              r'compileSdk\s+\d+',
-              'compileSdk 36',
-              s
-          )
-
-          p.write_text(s)
-          print("compileSdk 36 configuré dans build.gradle")
-          PY
-          fi
-
-          echo "Vérification Android :"
-          grep -R "compileSdk" android/app/ || true
+          echo "compileSdk configuré sur 36."
 
       - name: Installer les dépendances
         shell: bash
         run: |
-          cd project
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          flutter pub get
+
+      - name: Nettoyer le projet
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          flutter clean
           flutter pub get
 
       - name: Construire APK
         shell: bash
         run: |
-          cd project
-          flutter clean
-          flutter pub get
+          set -e
+
+          cd "$PROJECT_DIR"
+
           flutter build apk --release
 
-      - name: Construire AAB
+      - name: Construire App Bundle
         shell: bash
         run: |
-          cd project
+          set -e
+
+          cd "$PROJECT_DIR"
+
           flutter build appbundle --release
 
-      - name: Récupérer APK
+      - name: Publier APK
         uses: actions/upload-artifact@v4
         with:
-          name: BizChatPro-APK
-          path: project/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
+          name: BizChat-Pro-APK
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Récupérer AAB
+      - name: Publier AAB
         uses: actions/upload-artifact@v4
         with:
-          name: BizChatPro-AAB
-          path: project/build/app/outputs/bundle/release/app-release.aab
-          if-no-files-found: error
+          name: BizChat-Pro-AAB
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/bundle/release/app-release.aab
